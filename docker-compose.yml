@@ -1,0 +1,135 @@
+version: '3.8'
+
+services:
+  api:
+    image: node:18-alpine
+    command: npm run start:prod
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://user:password@timescaledb:5432/plantdb
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION}
+      - SENTRY_DSN=${SENTRY_DSN}
+    depends_on:
+      - timescaledb
+      - redis
+      - data-collector
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - backend
+      - frontend
+
+  data-collector:
+    image: node:18-alpine
+    command: npm run collector:start
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://user:password@timescaledb:5432/plantdb
+      - REDIS_URL=redis://redis:6379
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+    depends_on:
+      - timescaledb
+      - redis
+    networks:
+      - backend
+
+  analytics-service:
+    image: node:18-alpine
+    command: npm run analytics:start
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://user:password@timescaledb:5432/plantdb
+      - REDIS_URL=redis://redis:6379
+      - CLICKHOUSE_URL=clickhouse://clickhouse:8123
+    depends_on:
+      - timescaledb
+      - redis
+      - clickhouse
+    networks:
+      - backend
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=plantdb
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d plantdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend
+
+  queue:
+    image: rabbitmq:3-management-alpine
+    environment:
+      - RABBITMQ_DEFAULT_USER=user
+      - RABBITMQ_DEFAULT_PASS=password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - backend
+
+volumes:
+  timescaledb_data:
+  redis_data:
+  clickhouse_data:
+  rabbitmq_data:
+
+networks:
+  backend:
+  frontend:
